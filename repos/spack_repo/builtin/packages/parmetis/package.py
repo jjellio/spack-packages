@@ -73,6 +73,7 @@ class Parmetis(CMakePackage):
                     rpath_options.append(o)
             for o in rpath_options:
                 options.remove(o)
+            options.append("-DCMAKE_POSITION_INDEPENDENT_CODE=ON")
 
         if "+gdb" in spec:
             options.append("-DGDB:BOOL=ON")

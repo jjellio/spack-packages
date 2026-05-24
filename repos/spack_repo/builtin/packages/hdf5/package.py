@@ -388,44 +388,24 @@ class Hdf5(CMakePackage):
 
     @property
     def libs(self):
-        """HDF5 can be queried for the following parameters:
-
+        """HDF5 consumer link interface.
+    
+        HDF5 can be queried for the following parameters:
+    
         - "hl": high-level interface
         - "cxx": C++ APIs
         - "fortran": Fortran APIs
         - "java": Java APIs
-
-        :return: list of matching libraries
         """
-        query_parameters = self.spec.last_query.extra_parameters
-
-        shared = self.spec.satisfies("+shared")
-
-        # This map contains a translation from query_parameters
-        # to the libraries needed
+    
+        spec = self.spec
+        query_parameters = spec.last_query.extra_parameters
+        shared = spec.satisfies("+shared")
+    
         query2libraries = {
             tuple(): ["libhdf5"],
+    
             ("cxx", "fortran", "hl", "java"): [
-                # When installed with Autotools, the basename of the real
-                # library file implementing the High-level Fortran interface is
-                # 'libhdf5hl_fortran'. Starting versions 1.8.22, 1.10.5 and
-                # 1.12.0, the Autotools installation also produces a symbolic
-                # link 'libhdf5_hl_fortran.<so/a>' to
-                # 'libhdf5hl_fortran.<so/a>'. Note that in the case of the
-                # dynamic library, the latter is a symlink to the real sonamed
-                # file 'libhdf5_fortran.so.<abi-version>'. This means that all
-                # dynamically linked executables/libraries of the dependent
-                # packages need 'libhdf5_fortran.so.<abi-version>' with the same
-                # DT_SONAME entry. However, the CMake installation (at least
-                # starting version 1.8.10) does not produce it. Instead, the
-                # basename of the library file is 'libhdf5_hl_fortran'. Which
-                # means that switching to CMake requires rebuilding of all
-                # dependant packages that use the High-level Fortran interface.
-                # Therefore, we do not try to preserve backward compatibility
-                # with Autotools installations by creating symlinks. The only
-                # packages that could benefit from it would be those that
-                # hardcode the library name in their building systems. Such
-                # packages should simply be patched.
                 "libhdf5_hl_fortran",
                 "libhdf5_hl_f90cstub",
                 "libhdf5_hl_cpp",
@@ -435,7 +415,13 @@ class Hdf5(CMakePackage):
                 "libhdf5_java",
                 "libhdf5",
             ],
-            ("cxx", "hl"): ["libhdf5_hl_cpp", "libhdf5_hl", "libhdf5"],
+    
+            ("cxx", "hl"): [
+                "libhdf5_hl_cpp",
+                "libhdf5_hl",
+                "libhdf5",
+            ],
+    
             ("fortran", "hl"): [
                 "libhdf5_hl_fortran",
                 "libhdf5_hl_f90cstub",
@@ -444,18 +430,70 @@ class Hdf5(CMakePackage):
                 "libhdf5_f90cstub",
                 "libhdf5",
             ],
-            ("hl",): ["libhdf5_hl", "libhdf5"],
-            ("cxx", "fortran"): ["libhdf5_fortran", "libhdf5_f90cstub", "libhdf5_cpp", "libhdf5"],
-            ("cxx",): ["libhdf5_cpp", "libhdf5"],
-            ("fortran",): ["libhdf5_fortran", "libhdf5_f90cstub", "libhdf5"],
-            ("java",): ["libhdf5_java", "libhdf5"],
+    
+            ("hl",): [
+                "libhdf5_hl",
+                "libhdf5",
+            ],
+    
+            ("cxx", "fortran"): [
+                "libhdf5_fortran",
+                "libhdf5_f90cstub",
+                "libhdf5_cpp",
+                "libhdf5",
+            ],
+    
+            ("cxx",): [
+                "libhdf5_cpp",
+                "libhdf5",
+            ],
+    
+            ("fortran",): [
+                "libhdf5_fortran",
+                "libhdf5_f90cstub",
+                "libhdf5",
+            ],
+    
+            ("java",): [
+                "libhdf5_java",
+                "libhdf5",
+            ],
         }
-
-        # Turn the query into the appropriate key
+    
         key = tuple(sorted(query_parameters))
         libraries = query2libraries[key]
-
-        return find_libraries(libraries, root=self.prefix, shared=shared, recursive=True)
+    
+        libs = find_libraries(
+            libraries,
+            root=self.prefix,
+            shared=shared,
+            recursive=True,
+        )
+    
+        # Direct link-interface dependencies.
+        #
+        # Order matters for static archives:
+        #
+        #   consumer objects
+        #   HDF5 interface/core libraries
+        #   MPI, if HDF5 was built with parallel support
+        #   SZIP, if enabled
+        #   zlib provider
+        #
+        # zlib-api is deliberately late because it is a lower-level compression
+        # dependency.
+        
+        # technically this is correct, but you typically do not
+        # explicitly add MPI libs (we expect spack's wrapper to do this)
+        #if spec.satisfies("+mpi"):
+        #    libs += spec["mpi"].libs
+    
+        if spec.satisfies("+szip"):
+            libs += spec["szip"].libs
+    
+        libs += spec["zlib-api"].libs
+    
+        return libs
 
     @classmethod
     def determine_version(cls, exe):
@@ -563,6 +601,7 @@ class Hdf5(CMakePackage):
             self.define_from_variant("HDF5_BUILD_FORTRAN", "fortran"),
             self.define_from_variant("HDF5_BUILD_JAVA", "java"),
             self.define_from_variant("HDF5_BUILD_TOOLS", "tools"),
+            self.define("CMAKE_POSITION_INDEPENDENT_CODE", True),
         ]
 
         # Always enable this option. This does not actually enable any

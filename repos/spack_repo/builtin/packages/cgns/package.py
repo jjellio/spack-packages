@@ -88,6 +88,57 @@ class Cgns(CMakePackage):
     # patch spurious space in function name (breaks nvfortran compilation)
     patch("cgns-4.5-nvfortran.patch", when="@4.5.0 +fortran %nvhpc")
 
+    @property
+    def libs(self):
+        """CGNS consumer link interface.
+    
+        Return the ordered library interface needed by a consumer of CGNS.
+    
+        For static linking, order matters:
+    
+            libcgns
+            HDF5 C interface, if CGNS was built with HDF5
+    
+        MPI is intentionally not appended here.  Parallel CGNS/HDF5 builds should
+        get MPI through the compiler wrapper / FindMPI / package MPI configuration,
+        not through CGNS_LIBRARY_NAMES.
+        """
+    
+        spec = self.spec
+    
+        # In your static-only repository, this could simply be shared=False.
+        #
+        # This version preserves normal behavior for shared-only builds, while
+        # preferring static when the package was built as +static~shared.
+        shared = spec.satisfies("+shared")
+        if spec.satisfies("+static~shared"):
+            shared = False
+    
+        libs = find_libraries(
+            "libcgns",
+            root=self.prefix,
+            shared=shared,
+            recursive=True,
+        )
+    
+        if not libs:
+            raise RuntimeError(
+                f"CGNS library was not found under installation prefix {self.prefix}"
+            )
+    
+        # CGNS uses the HDF5 C interface, not HDF5 HL and not HDF5 Fortran.
+        # Let hdf5.libs provide its own corrected static link interface:
+        #
+        #     libhdf5
+        #     zlib-api
+        #     szip/libaec, if HDF5 +szip
+        #
+        # but not MPI, per your wrapper model.
+        if spec.satisfies("+hdf5"):
+            libs += spec["hdf5"].libs
+    
+        return libs
+    
     def cmake_args(self):
         spec = self.spec
         options = []

@@ -332,8 +332,55 @@ class NetcdfC(CMakePackage, AutotoolsPackage):
 
     @property
     def libs(self):
-        shared = "+shared" in self.spec
-        return find_libraries("libnetcdf", root=self.prefix, shared=shared, recursive=True)
+        spec = self.spec
+    
+        # Since your policy is static-only, be explicit.
+        libs = find_libraries(
+            "libnetcdf",
+            root=self.prefix,
+            shared=False,
+            recursive=True,
+        )
+    
+        # Add only libraries that are part of netcdf-c's static link interface.
+        #
+        # The exact conditions should mirror this netcdf-c package's depends_on
+        # and configure/cmake logic for your Spack version.
+    
+        if "hdf5" in spec:
+            libs += spec["hdf5:hl"].libs
+    
+        if "parallel-netcdf" in spec:
+            libs += spec["parallel-netcdf"].libs
+    
+        if "hdf" in spec:
+            libs += spec["hdf"].libs
+   
+        if "+dap" in spec or "+byterange" in spec:
+            libs += spec["curl"].libs
+ 
+        if "libxml2" in spec:
+            libs += spec["libxml2"].libs
+    
+        if "libzip" in spec:
+            libs += spec["libzip"].libs
+    
+        if "zlib-api" in spec:
+            libs += spec["zlib-api"].libs
+    
+        if "bzip2" in spec:
+            libs += spec["bzip2"].libs
+    
+        if "szip" in spec:
+            libs += spec["szip"].libs
+    
+        if "zstd" in spec:
+            libs += spec["zstd"].libs
+    
+        if "c-blosc" in spec:
+            libs += spec["c-blosc"].libs
+    
+        return libs
 
 
 class AnyBuilder(BaseBuilder):
@@ -378,7 +425,14 @@ class CMakeBuilder(AnyBuilder, cmake.CMakeBuilder):
             self.define_from_variant(nc + "ENABLE_FSYNC", "fsync"),
             self.define(nc + "ENABLE_LARGE_FILE_SUPPORT", True),
             self.define_from_variant("NETCDF_ENABLE_LOGGING", "logging"),
+            self.define('CMAKE_POSITION_INDEPENDENT_CODE', True)
         ]
+
+        if self.spec.satisfies("@4.9.3:"):
+            base_cmake_args.extend([self.define_from_variant("NETCDF_ENABLE_NCZARR_ZIP", "nczarr_zip")])
+        else:
+            base_cmake_args.extend([self.define_from_variant("ENABLE_NCZARR_ZIP", "nczarr_zip")])
+
         if "+parallel-netcdf" in self.pkg.spec:
             base_cmake_args.append(self.define(nc + "ENABLE_PNETCDF", True))
         if self.pkg.spec.satisfies("@4.3.1:"):

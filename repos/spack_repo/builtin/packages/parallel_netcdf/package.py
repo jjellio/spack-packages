@@ -118,28 +118,26 @@ class ParallelNetcdf(AutotoolsPackage):
             # the repository.
             autoreconf("-iv")
 
+    def flag_handler(self, name, flags):
+    
+        if self.spec.satisfies("+pic"):
+            if name == "cflags":
+                flags.append(self.compiler.cc_pic_flag)
+            elif name == "cxxflags":
+                flags.append(self.compiler.cxx_pic_flag)
+            elif name == "fflags":
+                flags.append(self.compiler.f77_pic_flag)
+        # https://github.com/Parallel-NetCDF/PnetCDF/issues/61
+        if name == "fflags" and self.spec.satisfies("@:1.12.1%gcc@10:"):
+            flags.append("-fallow-argument-mismatch")
+    
+        return (flags, None, None)
+    
     def configure_args(self):
         args = ["--with-mpi=%s" % self.spec["mpi"].prefix, "SEQ_CC=%s" % spack_cc]
 
         args += self.enable_or_disable("cxx")
         args += self.enable_or_disable("fortran")
-
-        flags = {"CFLAGS": [], "CXXFLAGS": [], "FFLAGS": [], "FCFLAGS": []}
-
-        if self.spec.satisfies("+pic"):
-            flags["CFLAGS"].append(self.compiler.cc_pic_flag)
-            flags["CXXFLAGS"].append(self.compiler.cxx_pic_flag)
-            flags["FFLAGS"].append(self.compiler.f77_pic_flag)
-            flags["FCFLAGS"].append(self.compiler.fc_pic_flag)
-
-        # https://github.com/Parallel-NetCDF/PnetCDF/issues/61
-        if self.spec.satisfies("@:1.12.1%gcc@10:"):
-            flags["FFLAGS"].append("-fallow-argument-mismatch")
-            flags["FCFLAGS"].append("-fallow-argument-mismatch")
-
-        for key, value in sorted(flags.items()):
-            if value:
-                args.append(f"{key}={' '.join(value)}")
 
         if self.spec.satisfies("@1.8:"):
             args.append("--enable-relax-coord-bound")
