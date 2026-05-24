@@ -601,7 +601,6 @@ class Hdf5(CMakePackage):
             self.define_from_variant("HDF5_BUILD_FORTRAN", "fortran"),
             self.define_from_variant("HDF5_BUILD_JAVA", "java"),
             self.define_from_variant("HDF5_BUILD_TOOLS", "tools"),
-            self.define("CMAKE_POSITION_INDEPENDENT_CODE", True),
         ]
 
         # Always enable this option. This does not actually enable any
