@@ -1,0 +1,204 @@
+--- a/netCDFConfig.cmake.in
++++ b/netCDFConfig.cmake.in
+@@ -10,9 +10,6 @@
+ set_and_check(netCDF_LIB_DIR "@CMAKE_INSTALL_PREFIX@/@CMAKE_INSTALL_LIBDIR@")
+ set(netCDF_LIBRARIES netCDF::netcdf)
+ 
+-# include target information
+-include("${CMAKE_CURRENT_LIST_DIR}/netCDFTargets.cmake")
+-
+ @IMPORT_MPI@
+ 
+ # Compiling Options
+@@ -40,12 +37,183 @@
+ set(netCDF_HAS_DAP4 @HAS_DAP4@)
+ set(netCDF_HAS_DISKLESS @HAS_DISKLESS@)
+ set(netCDF_HAS_MMAP @HAS_MMAP@)
+-if (netCDF_HAS_HDF4 OR netCDF_HAS_HDF5)
+-  include(CMakeFindDependencyMacro)
+-  find_dependency(HDF5)
+-endif ()
+-
+-if (@HAS_PARALLEL@)
+-  include(CMakeFindDependencyMacro)
+-  find_dependency(MPI @MPI_C_VERSION@ EXACT)
++
++include(CMakeFindDependencyMacro)
++
++# ---------------------------------------------------------------------------
++# Dependency targets used by netCDFTargets.cmake must exist before that file is
++# included.  In particular, exported netCDF::netcdf link interfaces may contain
++# HDF5::HDF5, hdf5::hdf5, hdf5::hdf5_hl, and/or PNETCDF::PNETCDF.
++# ---------------------------------------------------------------------------
++
++function(_netcdf_define_interface_alias alias_target)
++  if(TARGET "${alias_target}")
++    return()
++  endif()
++
++  foreach(candidate ${ARGN})
++    if(TARGET "${candidate}")
++      add_library("${alias_target}" INTERFACE IMPORTED)
++      target_link_libraries("${alias_target}" INTERFACE "${candidate}")
++      return()
++    endif()
++  endforeach()
++endfunction()
++
++# MPI may be needed directly by netCDF, by parallel HDF5, and/or by PnetCDF.
++if(netCDF_HAS_PARALLEL OR netCDF_HAS_PNETCDF)
++  if(NOT TARGET MPI::MPI_C)
++    find_dependency(MPI @MPI_C_VERSION@ EXACT)
++  endif()
++endif()
++
++# HDF5/HDF5-HL compatibility targets.
++if(netCDF_HAS_HDF4 OR netCDF_HAS_HDF5)
++  find_dependency(HDF5 CONFIG COMPONENTS C HL)
++
++  _netcdf_define_interface_alias(hdf5::hdf5
++    hdf5::hdf5-shared
++    hdf5::hdf5-static
++    hdf5-shared
++    hdf5-static
++    hdf5
++  )
++
++  if(NOT TARGET hdf5::hdf5)
++    if(DEFINED HDF5_C_LIBRARIES)
++      add_library(hdf5::hdf5 INTERFACE IMPORTED)
++      target_link_libraries(hdf5::hdf5 INTERFACE ${HDF5_C_LIBRARIES})
++      if(DEFINED HDF5_INCLUDE_DIRS)
++        set_target_properties(hdf5::hdf5 PROPERTIES
++          INTERFACE_INCLUDE_DIRECTORIES "${HDF5_INCLUDE_DIRS}")
++      endif()
++    elseif(DEFINED HDF5_LIBRARIES)
++      add_library(hdf5::hdf5 INTERFACE IMPORTED)
++      target_link_libraries(hdf5::hdf5 INTERFACE ${HDF5_LIBRARIES})
++      if(DEFINED HDF5_INCLUDE_DIRS)
++        set_target_properties(hdf5::hdf5 PROPERTIES
++          INTERFACE_INCLUDE_DIRECTORIES "${HDF5_INCLUDE_DIRS}")
++      endif()
++    endif()
++  endif()
++
++  _netcdf_define_interface_alias(hdf5::hdf5_hl
++    hdf5::hdf5_hl-shared
++    hdf5::hdf5_hl-static
++    hdf5_hl-shared
++    hdf5_hl-static
++    hdf5_hl
++  )
++
++  if(NOT TARGET hdf5::hdf5_hl)
++    if(DEFINED HDF5_HL_LIBRARIES)
++      add_library(hdf5::hdf5_hl INTERFACE IMPORTED)
++      target_link_libraries(hdf5::hdf5_hl INTERFACE ${HDF5_HL_LIBRARIES})
++      if(DEFINED HDF5_INCLUDE_DIRS)
++        set_target_properties(hdf5::hdf5_hl PROPERTIES
++          INTERFACE_INCLUDE_DIRECTORIES "${HDF5_INCLUDE_DIRS}")
++      endif()
++    endif()
++  endif()
++
++  if(NOT TARGET HDF5::HDF5)
++    add_library(HDF5::HDF5 INTERFACE IMPORTED)
++
++    if(TARGET hdf5::hdf5_hl)
++      target_link_libraries(HDF5::HDF5 INTERFACE hdf5::hdf5_hl)
++    endif()
++
++    if(TARGET hdf5::hdf5)
++      target_link_libraries(HDF5::HDF5 INTERFACE hdf5::hdf5)
++    endif()
++  endif()
++
++  if(netCDF_HAS_HDF5 AND NOT TARGET hdf5::hdf5)
++    message(FATAL_ERROR
++      "netCDF was built with HDF5 support, but no usable HDF5 C target "
++      "was available while loading netCDFConfig.cmake")
++  endif()
++
++  if(netCDF_HAS_HDF5 AND NOT TARGET hdf5::hdf5_hl)
++    message(FATAL_ERROR
++      "netCDF was built with HDF5 support, but no usable HDF5 HL target "
++      "was available while loading netCDFConfig.cmake")
++  endif()
++endif()
++
++# PnetCDF compatibility target.  Parallel-NetCDF is commonly built with
++# Autotools and does not necessarily install a CMake package config, but the
++# netCDF::netcdf exported target may still reference PNETCDF::PNETCDF.
++if(netCDF_HAS_PNETCDF)
++  if(NOT TARGET PNETCDF::PNETCDF)
++    # Use an existing package/module if the consuming project provides one.
++    find_package(PNETCDF CONFIG QUIET)
++  endif()
++
++  if(NOT TARGET PNETCDF::PNETCDF)
++    find_package(PNETCDF MODULE QUIET)
++  endif()
++
++  if(NOT TARGET PNETCDF::PNETCDF)
++    find_path(PNETCDF_INCLUDE_DIR
++      NAMES pnetcdf.h
++      HINTS
++        ${PNETCDF_ROOT}
++        ${PNETCDF_DIR}
++        ENV PNETCDF_ROOT
++        ENV PNETCDF_DIR
++      PATH_SUFFIXES include
++    )
++
++    find_library(PNETCDF_LIBRARY
++      NAMES pnetcdf
++      HINTS
++        ${PNETCDF_ROOT}
++        ${PNETCDF_DIR}
++        ENV PNETCDF_ROOT
++        ENV PNETCDF_DIR
++      PATH_SUFFIXES lib lib64
++    )
++
++    if(NOT PNETCDF_INCLUDE_DIR OR NOT PNETCDF_LIBRARY)
++      message(FATAL_ERROR
++        "netCDF was built with PnetCDF support, but PNETCDF::PNETCDF "
++        "could not be reconstructed.  Could not find both pnetcdf.h and "
++        "libpnetcdf.  Set PNETCDF_ROOT or ensure the PnetCDF prefix is in "
++        "CMAKE_PREFIX_PATH.")
++    endif()
++
++    set(_netcdf_pnetcdf_include_dirs "${PNETCDF_INCLUDE_DIR}")
++    set(_netcdf_pnetcdf_link_libs "${PNETCDF_LIBRARY}")
++
++    if(TARGET MPI::MPI_C)
++      list(APPEND _netcdf_pnetcdf_link_libs MPI::MPI_C)
++    elseif(DEFINED MPI_C_LIBRARIES)
++      list(APPEND _netcdf_pnetcdf_link_libs ${MPI_C_LIBRARIES})
++      if(DEFINED MPI_C_INCLUDE_DIRS)
++        list(APPEND _netcdf_pnetcdf_include_dirs ${MPI_C_INCLUDE_DIRS})
++      endif()
++    endif()
++
++    add_library(PNETCDF::PNETCDF UNKNOWN IMPORTED)
++    set_target_properties(PNETCDF::PNETCDF PROPERTIES
++      IMPORTED_LOCATION "${PNETCDF_LIBRARY}"
++      INTERFACE_INCLUDE_DIRECTORIES "${_netcdf_pnetcdf_include_dirs}"
++      INTERFACE_LINK_LIBRARIES "${_netcdf_pnetcdf_link_libs}"
++    )
++
++    unset(_netcdf_pnetcdf_include_dirs)
++    unset(_netcdf_pnetcdf_link_libs)
++  endif()
++
++  if(NOT TARGET PNETCDF::PNETCDF)
++    message(FATAL_ERROR
++      "netCDF was built with PnetCDF support, but target PNETCDF::PNETCDF "
++      "is still not available while loading netCDFConfig.cmake")
++  endif()
+ endif()
++
++# Include target information only after all public dependency targets are
++# available.
++include("${CMAKE_CURRENT_LIST_DIR}/netCDFTargets.cmake")
++
