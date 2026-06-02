@@ -162,6 +162,7 @@ class NetcdfC(CMakePackage, AutotoolsPackage):
     variant("szip", default=True, description="Enable Szip compression plugin")
     variant("blosc", default=True, description="Enable Blosc compression plugin")
     variant("zstd", default=True, description="Enable Zstandard compression plugin")
+    variant("bz2", default=True, description="Enable Bzip2 filter support")
 
     depends_on("c", type="build")
     depends_on("cxx", type="build", when="build_system=cmake")
@@ -289,6 +290,7 @@ class NetcdfC(CMakePackage, AutotoolsPackage):
     depends_on("szip", when="+szip")
     depends_on("c-blosc", when="+blosc")
     depends_on("zstd", when="+zstd")
+    depends_on("bzip2", when="+bz2")
 
     # Byte-range I/O was added in version 4.7.0:
     conflicts("+byterange", when="@:4.6")
@@ -428,8 +430,41 @@ class CMakeBuilder(AnyBuilder, cmake.CMakeBuilder):
             self.define_from_variant(nc + "ENABLE_FSYNC", "fsync"),
             self.define(nc + "ENABLE_LARGE_FILE_SUPPORT", True),
             self.define_from_variant("NETCDF_ENABLE_LOGGING", "logging"),
-            self.define('CMAKE_POSITION_INDEPENDENT_CODE', True)
+            self.define('CMAKE_POSITION_INDEPENDENT_CODE', True),
+
+            self.define_from_variant("NETCDF_ENABLE_BLOSC", "blosc"),
+            self.define_from_variant("NETCDF_ENABLE_BZ2", "bz2"),
+            self.define_from_variant("NETCDF_ENABLE_SZIP", "szip"),
+            self.define_from_variant("NETCDF_ENABLE_ZSTD", "zstd"),
+        
+            self.define_from_variant("NETCDF_ENABLE_FILTER_BLOSC", "blosc"),
+            self.define_from_variant("NETCDF_ENABLE_FILTER_BZ2", "bz2"),
+            self.define_from_variant("NETCDF_ENABLE_FILTER_SZIP", "szip"),
+            self.define_from_variant("NETCDF_ENABLE_FILTER_ZSTD", "zstd"),
+
+            # hdf5 find wants to use the h5cc wrapper, which won't work in spack
+            #self.define("CMAKE_FIND_PACKAGE_PREFER_CONFIG", True),
         ]
+
+        # module filters typically can be static
+        if "~shared" in self.spec:
+            base_cmake_args.extend([
+                self.define("NETCDF_ENABLE_FILTER_BLOSC", False),
+                self.define("NETCDF_ENABLE_FILTER_BZ2", False),
+                self.define("NETCDF_ENABLE_FILTER_SZIP", False),
+                self.define("NETCDF_ENABLE_FILTER_ZSTD", False),
+            ])
+
+
+        if "+szip" in self.spec:
+            args.extend([
+                self.define("Szip_ROOT", self.spec["szip"].prefix),
+            ])
+        
+        if "+zstd" in self.spec:
+            args.extend([
+                self.define("Zstd_ROOT", self.spec["zstd"].prefix),
+            ])
 
         if self.spec.satisfies("@4.9.3:"):
             base_cmake_args.extend([self.define_from_variant("NETCDF_ENABLE_NCZARR_ZIP", "nczarr_zip")])
