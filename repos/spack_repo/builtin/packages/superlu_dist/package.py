@@ -98,6 +98,29 @@ class SuperluDist(CMakePackage, CudaPackage, ROCmPackage):
         when="@9.0:9.1",
     )
 
+
+    def _uses_openmp(self, dep_name):
+        dspec = self.spec[dep_name]
+    
+        # OpenBLAS style: openblas threads=openmp
+        if "threads" in dspec.variants and dspec.satisfies("threads=openmp"):
+            return True
+    
+        # Common style: foo +openmp
+        if "openmp" in dspec.variants and dspec.satisfies("+openmp"):
+            return True
+    
+        return False
+    
+    
+    def _tpl_libs(self, dep_name):
+        libs = self.spec[dep_name].libs.ld_flags
+    
+        if self._uses_openmp(dep_name):
+            libs += ";" + self.compiler.openmp_flag
+    
+        return libs
+    
     def cmake_args(self):
         spec = self.spec
         cmake_args = []
@@ -112,8 +135,8 @@ class SuperluDist(CMakePackage, CudaPackage, ROCmPackage):
         append_define("CMAKE_CXX_COMPILER", spec["mpi"].mpicxx)
         append_define("CMAKE_INSTALL_LIBDIR", self.prefix.lib)
         append_define("CMAKE_INSTALL_BINDIR", self.prefix.bin)
-        append_define("TPL_BLAS_LIBRARIES", spec["blas"].libs.ld_flags)
-        append_define("TPL_LAPACK_LIBRARIES", spec["lapack"].libs.ld_flags)
+        append_define("TPL_BLAS_LIBRARIES", self._tpl_libs("blas"))
+        append_define("TPL_LAPACK_LIBRARIES", self._tpl_libs("lapack"))
         append_define("TPL_ENABLE_LAPACKLIB", True)
         append_define("USE_XSDK_DEFAULTS", True)
 
@@ -131,8 +154,16 @@ class SuperluDist(CMakePackage, CudaPackage, ROCmPackage):
         append_define("XSDK_INDEX_SIZE", "64" if "+int64" in spec else "32")
 
         append_from_variant("enable_openmp", "openmp")
-        if "~openmp" in spec:
+
+        need_openmp = ("+openmp" in spec )
+        need_openmp = need_openmp or "threads=openmp" in spec['blas']
+        need_openmp = need_openmp or "threads=openmp" in spec['lapack']
+
+        if not need_openmp:
+            print("Do not need OpenMP")
             append_define("CMAKE_DISABLE_FIND_PACKAGE_OpenMP", True)
+        else:
+            print("Need OpenMP")
 
         if "+cuda" in spec:
             append_define("TPL_ENABLE_CUDALIB", True)
