@@ -61,7 +61,9 @@ class ParallelNetcdf(AutotoolsPackage):
 
     depends_on("c", type="build")  # generated
     depends_on("cxx", type="build")  # generated
-    depends_on("fortran", type="build")  # generated
+    #depends_on("fortran", type="build")  # generated
+    # Not generated ... this is a bug, it makes you depend on fortran when you do not
+    depends_on("fortran", type="build", when="+fortran")
 
     depends_on("mpi")
 
@@ -119,17 +121,19 @@ class ParallelNetcdf(AutotoolsPackage):
             autoreconf("-iv")
 
     def flag_handler(self, name, flags):
-    
-        if self.spec.satisfies("+pic"):
+        if self.spec.satisfies("+pic"):  
             if name == "cflags":
                 flags.append(self.compiler.cc_pic_flag)
-            elif name == "cxxflags":
+        
+            if "+cxx" in self.spec and name == "cxxflags":
                 flags.append(self.compiler.cxx_pic_flag)
-            elif name == "fflags":
+        
+            if "+fortran" in self.spec and name in ("fflags", "fcflags"):
                 flags.append(self.compiler.f77_pic_flag)
-        # https://github.com/Parallel-NetCDF/PnetCDF/issues/61
-        if name == "fflags" and self.spec.satisfies("@:1.12.1%gcc@10:"):
-            flags.append("-fallow-argument-mismatch")
+
+                # https://github.com/Parallel-NetCDF/PnetCDF/issues/61
+                if self.spec.satisfies("@:1.12.1%gcc@10:"):
+                    flags.append("-fallow-argument-mismatch")
     
         return (flags, None, None)
     
