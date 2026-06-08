@@ -415,16 +415,75 @@ class AnyBuilder(BaseBuilder):
 
 
 class CMakeBuilder(AnyBuilder, cmake.CMakeBuilder):
+    @run_before("cmake")
+    def write_hdf5_compat_file(self):
+        compat = join_path(self.stage.path, "spack-hdf5-compat.cmake")
+
+        with open(compat, "w") as f:
+            f.write(r"""
+include_guard(GLOBAL)
+
+find_package(HDF5 CONFIG REQUIRED)
+
+if(NOT TARGET HDF5::HDF5)
+  add_library(HDF5::HDF5 INTERFACE IMPORTED)
+
+  set(_hdf5_compat_libs)
+
+
+  foreach(_t IN ITEMS
+      hdf5::hdf5_hl-shared
+      hdf5::hdf5_hl-static
+      hdf5::hdf5_hl
+      hdf5_hl-shared
+      hdf5_hl-static
+      hdf5_hl)
+    if(TARGET "${_t}")
+      list(APPEND _hdf5_compat_libs "${_t}")
+      break()
+    endif()
+  endforeach()
+
+  foreach(_t IN ITEMS
+      hdf5::hdf5-shared
+      hdf5::hdf5-static
+      hdf5::hdf5
+      hdf5-shared
+      hdf5-static
+      hdf5)
+    if(TARGET "${_t}")
+      list(APPEND _hdf5_compat_libs "${_t}")
+      break()
+    endif()
+  endforeach()
+
+  if(_hdf5_compat_libs)
+    target_link_libraries(HDF5::HDF5 INTERFACE ${_hdf5_compat_libs})
+  elseif(DEFINED HDF5_LIBRARIES)
+    target_link_libraries(HDF5::HDF5 INTERFACE ${HDF5_LIBRARIES})
+    if(DEFINED HDF5_INCLUDE_DIRS)
+      set_target_properties(HDF5::HDF5 PROPERTIES
+        INTERFACE_INCLUDE_DIRECTORIES "${HDF5_INCLUDE_DIRS}")
+    endif()
+  else()
+    message(FATAL_ERROR
+      "Could not synthesize HDF5::HDF5 from the HDF5 config package.")
+  endif()
+endif()
+""")
+
     def cmake_args(self):
         # In 4.9.3, all CMake options were prefixed.
         # Ref. https://github.com/Unidata/netcdf-c/pull/2895
         nc = "NETCDF_" if self.spec.satisfies("@4.9.3:") else ""
         base_cmake_args = [
+            #self.define("CMAKE_C_COMPILER", spack_cc),
             self.define_from_variant("BUILD_SHARED_LIBS", "shared"),
             self.define_from_variant(nc + "ENABLE_BYTERANGE", "byterange"),
             self.define(nc + "BUILD_UTILITIES", True),
             self.define(nc + "ENABLE_NETCDF_4", True),
             self.define_from_variant(nc + "ENABLE_DAP", "dap"),
+            self.define_from_variant(nc + "ENABLE_LIBXML2", "dap"),
             self.define_from_variant(nc + "ENABLE_HDF4", "hdf4"),
             self.define(nc + "ENABLE_PARALLEL_TESTS", False),
             self.define_from_variant(nc + "ENABLE_FSYNC", "fsync"),
@@ -443,8 +502,13 @@ class CMakeBuilder(AnyBuilder, cmake.CMakeBuilder):
             self.define_from_variant("NETCDF_ENABLE_FILTER_ZSTD", "zstd"),
 
             # hdf5 find wants to use the h5cc wrapper, which won't work in spack
-            #self.define("CMAKE_FIND_PACKAGE_PREFER_CONFIG", True),
+            #self.define("CMAKE_FIND_PACKAGE_PREFER_CONFIG", False),
         ]
+
+        compat = join_path(self.stage.path, "spack-hdf5-compat.cmake")
+        # Include after project() has enabled languages, before the rest of
+        # the project's CMake/TriBITS logic proceeds.
+        base_cmake_args.extend([self.define("CMAKE_PROJECT_INCLUDE", compat)])
 
         # module filters typically can be static
         if "~shared" in self.spec:
@@ -457,12 +521,12 @@ class CMakeBuilder(AnyBuilder, cmake.CMakeBuilder):
 
 
         if "+szip" in self.spec:
-            args.extend([
+            base_cmake_args.extend([
                 self.define("Szip_ROOT", self.spec["szip"].prefix),
             ])
         
         if "+zstd" in self.spec:
-            args.extend([
+            base_cmake_args.extend([
                 self.define("Zstd_ROOT", self.spec["zstd"].prefix),
             ])
 
