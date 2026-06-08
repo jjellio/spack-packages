@@ -7,6 +7,10 @@ import pathlib
 import re
 import sys
 import shlex
+import shutil
+import tempfile
+from contextlib import contextmanager
+
 
 from spack_repo.builtin.build_systems.cmake import CMakePackage
 from spack_repo.builtin.build_systems.cuda import CudaPackage
@@ -51,6 +55,10 @@ class Trilinosj(CMakePackage, CudaPackage, ROCmPackage):
 
     tags = ["e4s"]
 
+    # Default minimum free space required in the current temp dir.
+    # Override with SPACK_TEMPDIR_MIN_FREE_SIZE, e.g. 15GB, 500MB, 20gb.
+    default_tempdir_min_free_size = "15GB"
+
     # ###################### Versions ##########################
 
     version("master", branch="master")
@@ -76,12 +84,12 @@ class Trilinosj(CMakePackage, CudaPackage, ROCmPackage):
     )
 
     variant("openmp", default=False, description="Enable OpenMP")
-    variant("shared", default=True, description="Enables the build of shared libraries")
+    variant("shared", default=False, description="Enables the build of shared libraries")
     variant("uvm", default=False, when="@13.2: +cuda", description="Turn on UVM for CUDA build")
     variant("wrapper", default=False, description="Use nvcc-wrapper for CUDA build")
 
-    variant("superlu-dist", default=False, description="Compile with SuperluDist solvers")
-    variant("cusparse", default=False, description="Enable cuSPARSE support")
+    variant("debug_symbols", default=True, description="Enable debug symbols (-g)")
+
     # CUDA without wrapper requires clang
     requires(
         "%clang",
@@ -99,55 +107,234 @@ class Trilinosj(CMakePackage, CudaPackage, ROCmPackage):
     depends_on("c", type="build")
     depends_on("cxx", type="build")
 
-    # External Kokkos
-    depends_on("kokkos~cuda", when="~cuda")
-    depends_on("kokkos+wrapper", when="+wrapper")
-    depends_on("kokkos~wrapper", when="~wrapper")
-    depends_on("kokkos+pic~shared")
-    depends_on("kokkos+cuda_relocatable_device_code", when="+cuda_rdc")
-    depends_on("kokkos+hip_relocatable_device_code", when="+rocm_rdc")
-    depends_on("kokkos-kernels+cusparse+cublas+cusolver+blas+lapack", when="+cuda")
-    depends_on("kokkos-kernels+rocsparse+rocblas+rocsolver+blas+lapack", when="+rocm")
-    depends_on("kokkos~complex_align")
-    depends_on("kokkos@=5.0.2", when="@master:")
-    depends_on("kokkos@=5.0.2", when="@17.0")
-    depends_on("kokkos@=4.7.01", when="@16.2")
-    depends_on("kokkos@=4.5.01", when="@16.1")
-    depends_on("kokkos@=4.3.01", when="@16.0")
-    depends_on("kokkos@=4.2.01", when="@15.1:15")
-    depends_on("kokkos@=4.1.00", when="@14.4:15.0")
-    depends_on("kokkos-kernels@=5.0.2", when="@master:")
-    depends_on("kokkos-kernels@=5.0.2", when="@17.0")
-    depends_on("kokkos-kernels@=4.7.01", when="@16.2")
-    depends_on("kokkos-kernels@=4.5.01", when="@16.1")
-    depends_on("kokkos-kernels@=4.3.01", when="@16.0")
-    depends_on("kokkos-kernels@=4.2.01", when="@15.1:15")
-    depends_on("kokkos+openmp", when="+openmp")
-
-    for a in CudaPackage.cuda_arch_values:
-        arch_str = f"+cuda cuda_arch={a}"
-        depends_on(f"kokkos{arch_str}", when=arch_str)
-    for a in ROCmPackage.amdgpu_targets:
-        arch_str = f"+rocm amdgpu_target={a}"
-        depends_on(f"kokkos{arch_str}", when=arch_str)
-
-
     depends_on("blas")
     depends_on("lapack")
-    depends_on("boost+pic+system+icu~shared+program_options+graph+math+exception+stacktrace cxxstd=20")
-    depends_on("cgns~base_scope~int64~ipo~legacy~mem_debug~fortran+hdf5+mpi+scoping+static~shared")
-    depends_on("cmake@3.27:")
-    #depends_on("googletest", when="@17: +gtest")
-    depends_on("hdf5~cxx~threadsafe~java~fortran+hl+mpi~szip~shared")
-    depends_on("kokkos-nvcc-wrapper", when="+wrapper")
-    # depends_on('perl', type=('build',)) # TriBITS finds but doesn't use...
-    depends_on("metis~gdb~int64~real64~shared")
+    depends_on("boost")
+    depends_on("cgns")
+    depends_on("cmake@3.27:", type="build")
+    depends_on("hdf5")
+    depends_on("metis")
     depends_on("mpi")
-    depends_on("netcdf-c~hdf4~jna~dap+mpi+parallel-netcdf~shared~nczarr_zip build_system=cmake")
-    depends_on("parallel-netcdf~cxx~burstbuffer~fortran~shared")
-    depends_on("parmetis@=4.0.3~gdb~ipo~int64~shared")
-    depends_on("superlu-dist", when="+superlu-dist")
-    depends_on("zlib-ng~shared")
+    depends_on("netcdf-c")
+    depends_on("parallel-netcdf")
+    depends_on("parmetis")
+    depends_on("superlu-dist")
+    depends_on("zlib-api")
+
+#    #depends_on("googletest", when="@17: +gtest")
+    depends_on("kokkos-nvcc-wrapper", when="+wrapper")
+
+    # spack will clone git repos into TMP/TMPDIR
+    # the user-facing SPACK_ variables and even config
+    # variables like spack build-stage are not where the
+    # clone happens.
+    # this presents two public variables a user can set
+    # to control where git is staged
+    #
+    # export SPACK_LARGE_TMPDIR=/projects/trilinos/jjellio/tmpfs/tmp
+    # export SPACK_TEMPDIR_MIN_FREE_SIZE=15GB
+    def _parse_size(self, value):
+        """Parse strings like 15GB, 500MB, 1024KB, 123456."""
+        if value is None:
+            raise ValueError("size value is None")
+
+        value = value.strip()
+        match = re.match(r"^(\d+)\s*([kmgt]?b?)?$", value, re.IGNORECASE)
+
+        if not match:
+            raise ValueError("invalid size: {0}".format(value))
+
+        number = int(match.group(1))
+        unit = (match.group(2) or "B").lower()
+
+        multipliers = {
+            "": 1,
+            "b": 1,
+            "k": 1024,
+            "kb": 1024,
+            "m": 1024 ** 2,
+            "mb": 1024 ** 2,
+            "g": 1024 ** 3,
+            "gb": 1024 ** 3,
+            "t": 1024 ** 4,
+            "tb": 1024 ** 4,
+        }
+
+        if unit not in multipliers:
+            raise ValueError("invalid size unit: {0}".format(unit))
+
+        return number * multipliers[unit]
+
+    def _format_size(self, num_bytes):
+        """Human-readable byte count for warnings."""
+        units = ["B", "KB", "MB", "GB", "TB"]
+        value = float(num_bytes)
+
+        for unit in units:
+            if value < 1024 or unit == units[-1]:
+                return "{0:.1f}{1}".format(value, unit)
+            value /= 1024
+
+    def _tempdir_min_free_size(self):
+        value = os.environ.get(
+            "SPACK_TEMPDIR_MIN_FREE_SIZE",
+            self.default_tempdir_min_free_size,
+        )
+
+        try:
+            return self._parse_size(value)
+        except ValueError as err:
+            tty.warn(
+                "Ignoring invalid SPACK_TEMPDIR_MIN_FREE_SIZE={0!r}: {1}. "
+                "Using package default {2}.".format(
+                    value, err, self.default_tempdir_min_free_size
+                )
+            )
+            return self._parse_size(self.default_tempdir_min_free_size)
+
+    def _current_tempdir(self):
+        # Reset tempfile cache so this reflects current TMPDIR/TMP/TEMP.
+        tempfile.tempdir = None
+        return tempfile.gettempdir()
+
+    def _free_space(self, path):
+        return shutil.disk_usage(path).free
+
+    def _large_tmpdir_if_needed(self):
+        current_tmpdir = self._current_tempdir()
+        min_free = self._tempdir_min_free_size()
+    
+        try:
+            free = self._free_space(current_tmpdir)
+        except OSError as err:
+            tty.warn(
+                "Could not determine free space for temporary directory {0}: {1}. "
+                "Not overriding TMPDIR.".format(current_tmpdir, err)
+            )
+            return None
+    
+        if free >= min_free:
+            tty.debug(
+                "Temporary directory {0} has {1} free, above required {2}; "
+                "not overriding TMPDIR.".format(
+                    current_tmpdir,
+                    self._format_size(free),
+                    self._format_size(min_free),
+                )
+            )
+            return None
+    
+        large_tmpdir = os.environ.get("SPACK_LARGE_TMPDIR")
+    
+        if not large_tmpdir:
+            tty.warn(
+                "Temporary directory {0} has only {1} free, below requested "
+                "minimum {2}, but SPACK_LARGE_TMPDIR is not set. Continuing "
+                "without overriding TMPDIR.".format(
+                    current_tmpdir,
+                    self._format_size(free),
+                    self._format_size(min_free),
+                )
+            )
+            return None
+    
+        try:
+            mkdirp(large_tmpdir)
+        except OSError as err:
+            tty.warn(
+                "SPACK_LARGE_TMPDIR is set to {0}, but that directory could not "
+                "be created: {1}. Continuing without overriding TMPDIR.".format(
+                    large_tmpdir, err
+                )
+            )
+            return None
+    
+        if not os.path.isdir(large_tmpdir):
+            tty.warn(
+                "SPACK_LARGE_TMPDIR={0} exists but is not a directory. "
+                "Continuing without overriding TMPDIR.".format(large_tmpdir)
+            )
+            return None
+    
+        if not os.access(large_tmpdir, os.W_OK | os.X_OK):
+            tty.warn(
+                "SPACK_LARGE_TMPDIR={0} is not writable/searchable. "
+                "Continuing without overriding TMPDIR.".format(large_tmpdir)
+            )
+            return None
+    
+        try:
+            large_free = self._free_space(large_tmpdir)
+        except OSError as err:
+            tty.warn(
+                "SPACK_LARGE_TMPDIR is set to {0}, but free space could not "
+                "be determined: {1}. Continuing without overriding TMPDIR.".format(
+                    large_tmpdir, err
+                )
+            )
+            return None
+    
+        if large_free < min_free:
+            tty.warn(
+                "SPACK_LARGE_TMPDIR={0} has only {1} free, below requested "
+                "minimum {2}. Continuing without overriding TMPDIR.".format(
+                    large_tmpdir,
+                    self._format_size(large_free),
+                    self._format_size(min_free),
+                )
+            )
+            return None
+    
+        tty.warn(
+            "Temporary directory {0} has only {1} free, below requested "
+            "minimum {2}. Using SPACK_LARGE_TMPDIR={3} for fetch/stage "
+            "temporary files.".format(
+                current_tmpdir,
+                self._format_size(free),
+                self._format_size(min_free),
+                large_tmpdir,
+            )
+        )
+    
+        return large_tmpdir
+
+    @contextmanager
+    def _maybe_use_large_tmpdir(self):
+        large_tmpdir = self._large_tmpdir_if_needed()
+
+        if not large_tmpdir:
+            yield
+            return
+
+        saved = {
+            "TMPDIR": os.environ.get("TMPDIR"),
+            "TMP": os.environ.get("TMP"),
+            "TEMP": os.environ.get("TEMP"),
+        }
+
+        try:
+            os.environ["TMPDIR"] = large_tmpdir
+            os.environ["TMP"] = large_tmpdir
+            os.environ["TEMP"] = large_tmpdir
+
+            # Python caches tempfile.gettempdir(), so force it to re-evaluate.
+            tempfile.tempdir = None
+
+            yield
+
+        finally:
+            for name, value in saved.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+
+            tempfile.tempdir = None
+
+    def do_fetch(self, mirror_only=False):
+        with self._maybe_use_large_tmpdir():
+            return super().do_fetch(mirror_only)
+
 
     def flag_handler(self, name, flags):
         spec = self.spec
@@ -180,14 +367,6 @@ class Trilinosj(CMakePackage, CudaPackage, ROCmPackage):
             else:
                 env.set("CXX", self["kokkos-nvcc-wrapper"].kokkos_cxx)
 
-        if "+rocm" in spec:
-            if "+mpi" in spec:
-                env.set("OMPI_CXX", self.spec["hip"].hipcc)
-                env.set("MPICH_CXX", self.spec["hip"].hipcc)
-                env.set("MPICXX_CXX", self.spec["hip"].hipcc)
-            else:
-                env.set("CXX", self.spec["hip"].hipcc)
-        
         env.set("SPACK_COMPILER_FLAGS_REPLACE", "")
         env.set("SPACK_STORE_RPATH_DIRS", "")
     
@@ -348,7 +527,9 @@ endif()
         spec = self.spec
         define = self.define
         define_from_variant = self.define_from_variant
-
+        cxx_flags = []
+        c_flags = []
+        linker_flags = []
         
         compat = join_path(self.stage.path, "spack-hdf5-compat.cmake")
 
@@ -370,29 +551,15 @@ endif()
         # Same but for TPLs
         define_tpl_enable = _make_definer("TPL_ENABLE_")
 
-        if self.spec.satisfies("@master: +kokkos"):
-            with open(
-                os.path.join(self.stage.source_path, "packages", "kokkos", "CMakeLists.txt")
-            ) as f:
-                all_txt = f.read()
-            r = dict(
-                re.findall(r".*set\s?\(\s?Kokkos_VERSION_(MAJOR|MINOR|PATCH)\s?(\d+)", all_txt)
-            )
-            kokkos_version_in_trilinos_source = Version(
-                ".".join([r["MAJOR"], r["MINOR"], r["PATCH"].zfill(2)])
-            )
-            kokkos_version_specified = spec["kokkos"].version
-            if kokkos_version_in_trilinos_source != kokkos_version_specified:
-                raise InstallError(
-                    "For Trilinos@[master,develop], ^kokkos version in spec must "
-                    "match version in Trilinos source code. Specify ^kokkos@{0} ".format(
-                        kokkos_version_in_trilinos_source
-                    )
-                    + "for trilinos@[master,develop] instead of ^kokkos@{0}.\n".format(
-                        kokkos_version_specified
-                    )
-                    + "Trilinos recipe maintainers, please update the ^kokkos version range"
-                )
+
+        if "+debug_symbols" in spec:
+            # debug symbols in rocm 6.4.x is broken
+            if self.spec.satisfies("+rocm ^hip@6.4:6.4"):
+                cxx_flags.append("-gline-tables-only")
+                c_flags.append("-gline-tables-only")
+            else:
+                cxx_flags.append("-g")
+                c_flags.append("-g")
 
         # #################### Base Settings #######################
 
@@ -405,28 +572,41 @@ endif()
                 define_trilinos_enable("SECONDARY_TESTED_CODE", True),
                 define_trilinos_enable("TESTS", False),
                 define_trilinos_enable("Fortran", False),
+                define_from_variant("CMAKE_CXX_STANDARD", "cxxstd"),
                 # Include after project() has enabled languages, before the rest of
                 # the project's CMake/TriBITS logic proceeds.
-                self.define("CMAKE_PROJECT_INCLUDE", compat)
-            ]
+                # this is a workaround because netcdf-c will call find package
+                # on hdf5, but it does it in the wrong order. Specifically
+                # it delcares it's own library interface first, then HDF5, and MPI
+                # the prior is how a library should be linked - but cmake interfaces
+                # need to be declared from the bottom up. e.g. MPI -> HDF5 -> netcdf
+                # you will find 'compat' generated in a helper function
+                # I also patch the order of library definitions in netcdf-c's cmake module
+                # this address two things: it resolves HDF5::HDF5 vs hdf5::hdf5,
+                # and it ensures the library interface order is correct
+                #
+                # if you omit this, you will find missing library declarations at the end of configure
+                self.define("CMAKE_PROJECT_INCLUDE", compat),
+                ]
         )
 
-
-        if spec.version >= Version("13"):
-            options.append(define_from_variant("CMAKE_CXX_STANDARD", "cxxstd"))
 
         # ################## Trilinos Packages #####################
 
         options.extend([
+            # this would be what empire wants
             self.define("Trilinos_ENABLE_Panzer", True),
             self.define("Trilinos_ENABLE_PanzerMiniEM", True),
-        
-            self.define("Ifpack2_ENABLE_EXAMPLES", True),
+            # this is if you want to include mini-em, which could be a variant
             self.define("PanzerMiniEM_ENABLE_EXAMPLES", True),
         
+            # this gets you SPARC's block tridiag
+            self.define("Trilinos_ENABLE_Ifpack2", True),
+            self.define("Ifpack2_ENABLE_EXAMPLES", True),
+        
+            # we technically do not need to explicitly enable these
             self.define("Trilinos_ENABLE_MueLu", True),
             self.define("Trilinos_ENABLE_Teko", True),
-            self.define("Trilinos_ENABLE_Ifpack2", True),
             self.define("Trilinos_ENABLE_Belos", True),
             self.define("Trilinos_ENABLE_Amesos2", True),
             self.define("Trilinos_ENABLE_Stratimikos", True),
@@ -438,23 +618,15 @@ endif()
             self.define("Trilinos_ENABLE_STK", True),
             self.define("Trilinos_ENABLE_SEACAS", True),
         
-            self.define("TPL_ENABLE_MPI", True),
-            self.define("TPL_ENABLE_Matio", False),
-            self.define("CMAKE_SKIP_RPATH", True),
-            self.define("CMAKE_SKIP_BUILD_RPATH", True)
-        ])
 
-        # External Kokkos
-        if spec.satisfies("@14.4.0: +kokkos"):
-            options.append(define_tpl_enable("Kokkos"))
-        if spec.satisfies("@15.1: +kokkos"):
-            options.append(define_tpl_enable("KokkosKernels", True))
+        ])
 
         options.extend(
             [
                 define("CMAKE_C_COMPILER", self.spec["mpi"].mpicc),
                 define("CMAKE_CXX_COMPILER", self.spec["mpi"].mpicxx),
-                define("MPI_BASE_DIR", str(pathlib.PurePosixPath(spec["mpi"].prefix))),
+                self.define("CMAKE_SKIP_RPATH", True),
+                self.define("CMAKE_SKIP_BUILD_RPATH", True)
             ]
         )
 
@@ -472,19 +644,28 @@ endif()
             define("Netcdf_ALLOW_MODERN", True),
             define("HDF5_ROOT", self.spec["hdf5"].prefix),
             define("CMAKE_FIND_PACKAGE_PREFER_CONFIG", True),
-            #define("HDF5_C_COMPILER_EXECUTABLE_NO_INTERROGATE", "{} -lhdf5 -hdf5_hl ".format(self.spec["mpi"].mpicc) ),
-            #define("HDF5_C_COMPILER_EXECUTABLE",  "{} -lhdf5 -hdf5_hl ".format(self.spec["mpi"].mpicc)),
             *self.tribits_tpl_library_args("NETCDF", "netcdf-c"),
             *self.tribits_tpl_library_args("PNetCDF", "parallel-netcdf"),
             *self.tribits_tpl_library_args("SUPERLUDIST", "superlu-dist"),
+            # I don't want matio
+            self.define("TPL_ENABLE_Matio", False),
+            # MPI is assumed on
+            self.define("TPL_ENABLE_MPI", True),
+            define("MPI_BASE_DIR", str(pathlib.PurePosixPath(spec["mpi"].prefix))),
         ])
 
-        extra_link_flags = self.blas_lapack_thread_link_flags()
+        # spack does not propagate link flags in a sane way
+        # if a dependent package uses openmp, we need the open flags at link time
+        # a more sane method woudl be for spack to have "OpenMP" as a class
+        # packages inherit from, and impose properties .libs .link_flags in packages
+        # so that we could so something like self.spec.link_flags to have spack aggregate
+        # linker flags across all dependent specs.
+        # what we absolutely DO NOT WANT is to compile adding openmp flags to the compiler flags
+        # I know based on what I've enabled, that OpenBLAS will use OpenMP
+        # what I don't know is the openmp flag / libs used (gnu, llvm, etc..)
+        # my helper function attempts to reconcile this
+        linker_flags.extend(self.blas_lapack_thread_link_flags())
         
-        if extra_link_flags:
-            options.append(
-                self.define("CMAKE_EXE_LINKER_FLAGS"," ".join(extra_link_flags))
-            )
 
         options.append(define_trilinos_enable("Gtest", False))
         options.append(define_trilinos_enable("gtest", False))
@@ -502,78 +683,117 @@ endif()
             ])
 
         # ################# Kokkos ######################
+        define_kok_enable = _make_definer("Kokkos_ENABLE_")
 
-        if "+kokkos" in spec:
-            arch = Kokkos.get_microarch(spec.target, spec["kokkos"] if "kokkos" in spec else None)
-            if arch:
-                options.append(define("Kokkos_ARCH_" + arch.upper(), True))
+        # CPU target
+        arch = Kokkos.get_microarch(spec.target, spec["kokkos"] if "kokkos" in spec else None)
+        if arch:
+            options.append(define("Kokkos_ARCH_" + arch.upper(), True))
 
-            define_kok_enable = _make_definer("Kokkos_ENABLE_")
+        if "+openmp" in spec:
             options.extend(
                 [
-                    define_kok_enable("CUDA"),
                     define_kok_enable("OPENMP" if spec.version >= Version("13") else "OpenMP"),
                 ]
             )
-            if "+cuda" in spec:
-                use_uvm = "+uvm" in spec
-                options.extend(
-                    [
-                        define_kok_enable("CUDA_UVM", use_uvm),
-                        define_kok_enable("CUDA_LAMBDA", True),
-                        define_kok_enable("CUDA_CONSTEXPR", "cuda_constexpr"),
-                        define_kok_enable("CUDA_RELOCATABLE_DEVICE_CODE", "cuda_rdc"),
-                    ]
-                )
-                arch_map = Kokkos.spack_cuda_arch_map
-                options.extend(
-                    define("Kokkos_ARCH_" + arch_map[arch][0].upper(), True)
-                    for arch in spec.variants["cuda_arch"].value
-                )
+        # trilinos extra linker flags is different from linker flags
+        # these are things that make sense on the link line for Trilinos
+        # but could break general link options used in CMake's setup phases
+        # in practice, the cray-mpich libraries and GTL would make sense
+        # required as MPI's libraries... and found in that manner
 
-            if "+rocm" in spec:
-                options.extend(
-                    [
-                        define_kok_enable("HIP", True),
-                        define_kok_enable("HIP_RELOCATABLE_DEVICE_CODE", "rocm_rdc"),
-                        define("Tpetra_INST_HIP", True),
-                        define_tpl_enable("ROCBLAS", True),
-                        define_tpl_enable("ROCSOLVER", True),
-                        define_tpl_enable("ROCSPARSE", True)
-                    ])
+        trilinos_link_flags = []
+        if spec.satisfies("+rocm ^cray-mpich") or spec.satisfies("+rcuda ^cray-mpich"):
+            gtl_lib = spec["cray-mpich"].package.gtl_lib
+            trilinos_link_flags.extend(gtl_lib["ldflags"])
+            trilinos_link_flags.extend(gtl_lib["ldlibs"])
 
-                amdgpu_arch_map = Kokkos.amdgpu_arch_map
-                for amd_target in spec.variants["amdgpu_target"].value:
-                    try:
-                        arch = amdgpu_arch_map[amd_target][0]
-                    except KeyError:
-                        pass
-                    else:
-                        options.append(define("Kokkos_ARCH_" + arch.upper(), True))
+        if "+cuda" in spec:
+            use_uvm = "+uvm" in spec
+            options.extend([
+                    define_kok_enable("CUDA", True),
+                    define_kok_enable("CUDA_UVM", use_uvm),
+                    define_kok_enable("CUDA_LAMBDA", True),
+                    define_kok_enable("CUDA_CONSTEXPR", "cuda_constexpr"),
+                    define_kok_enable("CUDA_RELOCATABLE_DEVICE_CODE", "cuda_rdc"),
+                    define("Tpetra_INST_CUDA", True),
+                    # this would be a variant +device_tpls or something like that
+                    define_tpl_enable("CUBLAS", True),
+                    define_tpl_enable("CUSOLVER", True),
+                    define_tpl_enable("CUSPARSE", True)
+                ])
+
+            arch_map = Kokkos.spack_cuda_arch_map
+            for arch in spec.variants["cuda_arch"].value:
+              options.append(define("Kokkos_ARCH_" + arch_map[arch][0].upper(), True))
+
+        if "+rocm" in spec:
+            options.extend(
+                [
+                    define_kok_enable("HIP", True),
+                    define_kok_enable("HIP_RELOCATABLE_DEVICE_CODE", "rocm_rdc"),
+                    define("Tpetra_INST_HIP", True),
+
+                    # this would be a variant +device_tpls or something like that
+                    # TPLS - do I need to still tell KK to use them?
+                    define_tpl_enable("ROCBLAS", True),
+                    define_tpl_enable("ROCSOLVER", True),
+                    define_tpl_enable("ROCSPARSE", True),
+                    # GPU specific Trilinos - would make more sense to Trilinos
+                    # to enable this by default in the correct cases..
+                    define("Sacado_ENABLE_HIERARCHICAL_DFAD", True),
+                ])
+
+            cxx_flags.append("--offload-new-driver -x hip -mllvm -amdgpu-early-inline-all=false -mllvm -amdgpu-function-calls=false")
+            linker_flags.append("--offload-new-driver -x none --hip-link -fuse-ld=lld -Wl,--image-base=0x20000000 -Wl,-z,common-page-size=0x200000 -Wl,-z,max-page-size=0x200000 -Wl,--whole-archive,-lhugetlbfs,--no-whole-archive")
+            amdgpu_arch_map = Kokkos.amdgpu_arch_map
+            for amd_target in spec.variants["amdgpu_target"].value:
+                try:
+                    arch = amdgpu_arch_map[amd_target][0]
+                except KeyError:
+                    pass
+                else:
+                    options.append(define("Kokkos_ARCH_" + arch.upper(), True))
+
+            # this should add -L rocm/lib rocm/llvm/lib and rpath it
+            rocm_prefix = spec["hip"].prefix.up
+            
+            linker_flags.append("-L{0}".format(rocm_prefix.lib))
+            linker_flags.append("-Wl,-rpath,{0}".format(rocm_prefix.lib))
+            linker_flags.append("-Wl,-rpath,{0}".format(rocm_prefix.llvm.lib))
+
+            # this like this, do not work, so the prior just forms the rpath manually
+            #linker_flags.extend(spec["hip"].package.libs.ld_flags.split())
+            #linker_flags.extend(spec["hip"].libs)
+            #linker_flags.extend(spec["llvm-amdgpu"].package.libs.ld_flags.split())
+
+        # disable runpath and because some packages depend on pthreads and m, allow them as needed
+        trilinos_link_flags += [" -Wl,--disable-new-dtags,--as-needed,-lpthread,-lm,--no-as-needed "]
+
+        # always link via c++, we are a c++ project
+        options.append(define("CMAKE_LINKER", self.spec["mpi"].mpicxx))
+        if linker_flags:
+            options.extend([
+                self.define("CMAKE_EXE_LINKER_FLAGS",    " ".join(linker_flags)),
+                self.define("CMAKE_SHARED_LINKER_FLAGS", " ".join(linker_flags))
+            ])
+
+        if cxx_flags:
+            options.append(
+                self.define("CMAKE_CXX_FLAGS", " ".join(cxx_flags))
+            )
+
+        if c_flags:
+            options.append(
+                self.define("CMAKE_C_FLAGS", " ".join(c_flags))
+            )
+
+        if trilinos_link_flags:
+            options.append(self.define("Trilinos_EXTRA_LINK_FLAGS",
+                                        " ".join(trilinos_link_flags)))
+
+        for i, arg in enumerate(options):
+            if not isinstance(arg, str):
+                raise TypeError("cmake_args()[{}] is {}: {!r}".format(i, type(arg).__name__, arg))
 
         return options
-
-    @run_after("install")
-    def filter_python(self):
-        # When trilinos is built with Python, libpytrilinos is included
-        # through cmake configure files. Namely, Trilinos_LIBRARIES in
-        # TrilinosConfig.cmake contains pytrilinos. This leads to a
-        # run-time error: Symbol not found: _PyBool_Type and prevents
-        # Trilinos to be used in any C++ code, which links executable
-        # against the libraries listed in Trilinos_LIBRARIES.  See
-        # https://github.com/trilinos/Trilinos/issues/569 and
-        # https://github.com/trilinos/Trilinos/issues/866
-        # A workaround is to remove PyTrilinos from the COMPONENTS_LIST
-        # and to remove -lpytrilonos from Makefile.export.Trilinos
-        if self.spec.satisfies("@:13.0.1 +python"):
-            filter_file(
-                r"(SET\(COMPONENTS_LIST.*)(PyTrilinos;)(.*)",
-                (r"\1\3"),
-                "%s/cmake/Trilinos/TrilinosConfig.cmake" % self.prefix.lib,
-            )
-            filter_file(r"-lpytrilinos", "", "%s/Makefile.export.Trilinos" % self.prefix.include)
-
-    def setup_run_environment(self, env: EnvironmentModifications) -> None:
-        if "+exodus" in self.spec:
-            env.prepend_path("PYTHONPATH", self.prefix.lib)
-
