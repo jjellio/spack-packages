@@ -632,10 +632,50 @@ To resolve this problem, please try the following:
         with working_dir(self.build_directory):
             pkg.module.make(*params)
 
+    @staticmethod
+    def _install_parallelism_from_env() -> Optional[int]:
+        """Return an install-only make parallelism override.
+
+        SPACK_INSTALL_PARALLELISM is intentionally limited to the install
+        phase.  It is useful on shared filesystems such as Lustre, where
+        parallel builds may be fine but parallel install phases can create
+        metadata storms.
+        """
+        value = os.environ.get("SPACK_INSTALL_PARALLELISM")
+        if value is None or value == "":
+            return None
+
+        try:
+            jobs = int(value)
+        except ValueError:
+            tty.warn(
+                "Ignoring SPACK_INSTALL_PARALLELISM={0!r}: expected a positive integer".format(
+                    value
+                )
+            )
+            return None
+
+        if jobs < 1:
+            tty.warn(
+                "Ignoring SPACK_INSTALL_PARALLELISM={0!r}: expected a positive integer".format(
+                    value
+                )
+            )
+            return None
+
+        tty.warn(f"Install parallelism set to: {jobs}, and SPACK_INSTALL_PARALLELISM={value}")
+        return jobs
+
     def install(self, pkg: AutotoolsPackage, spec: Spec, prefix: Prefix) -> None:
         """Run "make" on the install targets specified by the builder."""
         with working_dir(self.build_directory):
-            pkg.module.make(*self.install_targets)
+            install_jobs = self._install_parallelism_from_env()
+            if install_jobs is None:
+                pkg.module.make(*self.install_targets)
+            else:
+                pkg.module.make("-j{0}".format(install_jobs), *self.install_targets, parallel=False)
+ 
+
 
     run_after("build")(execute_build_time_tests)
 

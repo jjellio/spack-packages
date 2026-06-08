@@ -478,13 +478,56 @@ class CMakeBuilder(BuilderWithDefaults):
                 self.build_targets.append("-v")
                 pkg.module.ninja(*self.build_targets)
 
+    @staticmethod
+    def _install_parallelism_from_env() -> Optional[int]:
+        """Return an install-only parallelism override.
+
+        SPACK_INSTALL_PARALLELISM is intentionally limited to the install
+        phase.  This allows high compile parallelism while reducing metadata
+        bursts during install on shared filesystems such as Lustre.
+        """
+        value = os.environ.get("SPACK_INSTALL_PARALLELISM")
+        if value is None or value == "":
+            return None
+
+        try:
+            jobs = int(value)
+        except ValueError:
+            tty.warn(
+                "Ignoring SPACK_INSTALL_PARALLELISM={0!r}: expected a positive integer".format(
+                    value
+                )
+            )
+            return None
+
+        if jobs < 1:
+            tty.warn(
+                "Ignoring SPACK_INSTALL_PARALLELISM={0!r}: expected a positive integer".format(
+                    value
+                )
+            )
+            return None
+
+        return jobs
+
+
     def install(self, pkg: CMakePackage, spec: Spec, prefix: Prefix) -> None:
         """Make the install targets"""
         with working_dir(self.build_directory):
+            install_jobs = self._install_parallelism_from_env()
             if self.generator == "Unix Makefiles":
-                pkg.module.make(*self.install_targets)
+                if install_jobs is None:
+                    pkg.module.make(*self.install_targets)
+                else:
+                    pkg.module.make("-j{0}".format(install_jobs), *self.install_targets, parallel=False)
+
             elif self.generator == "Ninja":
-                pkg.module.ninja(*self.install_targets)
+                if install_jobs is None:
+                    pkg.module.ninja(*self.install_targets)
+                else:
+                    pkg.module.ninja("-j{0}".format(install_jobs), *self.install_targets, parallel=False)
+ 
+
 
     run_after("build")(execute_build_time_tests)
 
