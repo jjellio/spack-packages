@@ -1,0 +1,22 @@
+[core]
+	repositoryformatversion = 0
+	filemode = true
+	bare = false
+	logallrefupdates = true
+[remote "upstream"]
+	url = https://github.com/spack/spack-packages.git
+	fetch = +refs/heads/*:refs/remotes/upstream/*
+[feature]
+	manyFiles = true
+[branch "develop"]
+	remote = upstream
+	merge = refs/heads/develop
+[remote "origin"]
+	url = git@github.com:jjellio/spack-packages.git
+	fetch = +refs/heads/*:refs/remotes/origin/*
+[branch "fix-libs-link-interface-hdf5"]
+	remote = origin
+	merge = refs/heads/fix-libs-link-interface-hdf5
+[branch "wip-all-unsplit-changes"]
+	remote = origin
+	merge = refs/heads/wip-all-unsplit-changes

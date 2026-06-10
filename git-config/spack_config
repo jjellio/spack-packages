@@ -1,0 +1,14 @@
+[core]
+	repositoryformatversion = 0
+	filemode = true
+	bare = false
+	logallrefupdates = true
+[remote "upstream"]
+	url = https://github.com/spack/spack.git
+	fetch = +refs/heads/develop:refs/remotes/upstream/develop
+[branch "develop"]
+	remote = upstream
+	merge = refs/heads/develop
+[remote "origin"]
+	url = git@github.com:jjellio/spack.git
+	fetch = +refs/heads/*:refs/remotes/origin/*
