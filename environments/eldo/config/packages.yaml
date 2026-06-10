@@ -1,0 +1,122 @@
+packages:
+  all:
+    target: [zen4]
+
+    providers:
+      mpi: [cray-mpich]
+
+  c:
+    require:
+    - llvm-amdgpu@=6.4.3
+  cxx:
+    require:
+    - llvm-amdgpu@=6.4.3
+  fortran:
+    require:
+    - llvm-amdgpu@=6.4.3
+
+  python:
+    externals:
+    - spec: python@3.12.12+bz2+crypt+ctypes+dbm+lzma+pyexpat+pythoncmd+readline+sqlite3+ssl+tix+tkinter+uuid+zlib
+      prefix: /opt/cray/pe/python/3.12.12
+    - spec: python@3.11.7+bz2+crypt+ctypes+dbm+lzma+pyexpat+pythoncmd+readline+sqlite3+ssl+tix+tkinter+uuid+zlib
+      prefix: /opt/cray/pe/python/3.11.7
+    - spec: python@3.11.5+bz2+crypt+ctypes+dbm+lzma+pyexpat+pythoncmd+readline+sqlite3+ssl+tix+tkinter+uuid+zlib
+      prefix: /opt/cray/pe/python/3.11.5
+    - spec: python@3.10.10+bz2+crypt+ctypes+dbm+lzma+pyexpat+pythoncmd+readline+sqlite3+ssl+tix+tkinter+uuid+zlib
+      prefix: /opt/cray/pe/python/3.10.10
+    - spec: python@3.9.13+bz2+crypt+ctypes+dbm+lzma+pyexpat+pythoncmd+readline+sqlite3+ssl+tix+tkinter+uuid+zlib
+      prefix: /opt/cray/pe/python/3.9.13.1
+    - spec: python@3.9.12+bz2+crypt+ctypes+dbm+lzma+pyexpat+pythoncmd+readline+sqlite3+ssl+tix+tkinter+uuid+zlib
+      prefix: /opt/cray/pe/python/3.9.12.1
+    - spec: python@3.9.7+bz2+crypt+ctypes+dbm+lzma+pyexpat+pythoncmd+readline+sqlite3+ssl+tix+tkinter+uuid+zlib
+      prefix: /opt/cray/pe/python/3.9.7.1
+    - spec: python@3.9.4+bz2+crypt+ctypes+dbm+lzma+pyexpat+pythoncmd+readline+sqlite3+ssl+tix+tkinter+uuid+zlib
+      prefix: /opt/cray/pe/python/3.9.4.2
+    require:
+    - '@3.11:3.11'
+
+  llvm-amdgpu:
+    externals:
+    - spec: llvm-amdgpu@=6.4.3
+      prefix: /opt/rocm-6.4.3
+      extra_attributes:
+        compilers:
+          c: /opt/rocm-6.4.3/bin/amdclang
+          cxx: /opt/rocm-6.4.3/bin/amdclang++
+          fortran: /opt/rocm-6.4.3/bin/amdflang
+    buildable: false
+
+  gcc:
+    externals:
+    - spec: gcc@13.3.1 languages:='c,c++,fortran'
+      prefix: /usr/tce
+      extra_attributes:
+        compilers:
+          c: /usr/tce/bin/gcc
+          cxx: /usr/tce/bin/g++
+          fortran: /usr/tce/bin/gfortran
+
+  cray-mpich:
+    externals:
+    - spec: cray-mpich@9.0.1  +rocm amdgpu_target=gfx942
+      prefix: /opt/cray/pe/mpich/9.0.1/ofi/amd/6.0
+    buildable: false
+
+  cray-pmi:
+    externals:
+    - spec: cray-pmi@6.1.17
+      prefix: /opt/cray/pe/pmi/6.1.17
+    buildable: false
+
+
+
+  hip:
+    buildable: false
+    externals:
+    - spec: hip@6.4.3
+      prefix: /opt/rocm-6.4.3/hip
+
+  hsa-rocr-dev:
+    buildable: false
+    externals:
+    - spec: hsa-rocr-dev@6.4.3
+      prefix: /opt/rocm-6.4.3
+
+  comgr:
+    buildable: false
+    externals:
+    - spec: comgr@6.4.3
+      prefix: /opt/rocm-6.4.3
+
+  rocblas:
+    buildable: false
+    externals:
+    - spec: rocblas@6.4.3
+      prefix: /opt/rocm-6.4.3
+
+  rocsolver:
+    buildable: false
+    externals:
+    - spec: rocsolver@6.4.3
+      prefix: /opt/rocm-6.4.3
+
+  rocsparse:
+    buildable: false
+    externals:
+    - spec: rocsparse@6.4.3
+      prefix: /opt/rocm-6.4.3
+
+  rocprim:
+    buildable: false
+    externals:
+    - spec: rocprim@6.4.3
+      prefix: /opt/rocm-6.4.3/rocprim
+
+  rocthrust:
+    buildable: false
+    externals:
+    - spec: rocthrust@6.4.3
+      prefix: /opt/rocm-6.4.3/rocprim
+
+

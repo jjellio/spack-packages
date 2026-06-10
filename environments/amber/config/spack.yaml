@@ -1,0 +1,74 @@
+spack:
+  concretizer:
+    unify: true
+    #reuse: true
+
+  specs:
+  - cmake
+  - zlib-ng~shared
+  - ninja
+  - boost+pic+system+icu~shared+program_options+graph+math+exception+stacktrace cxxstd=20
+  - hdf5@1.10.7 generator=ninja build_system=cmake ~cxx~threadsafe~java~fortran+hl+mpi~szip~shared
+  - parallel-netcdf~cxx~burstbuffer~fortran~shared
+  - netcdf-c build_system=cmake generator=ninja ~hdf4~jna~dap+mpi+parallel-netcdf~shared~nczarr_zip~szip ^parallel-netcdf ^hdf5
+  - cgns generator=ninja ~base_scope~int64~ipo~legacy~mem_debug~fortran+hdf5+mpi+scoping+static~shared ^hdf5 ^zlib-ng
+  - openblas+pic~shared~fortran threads=openmp
+  - parmetis@4.0.3~gdb~ipo~int64~shared
+  - metis@5:~gdb~int64~real64~shared
+  - superlu-dist@6.4.0 build_system=cmake generator=ninja ~ipo~int64~shared ^parmetis ^metis
+  - trilinosj@develop generator=ninja
+  - trilinosj@develop generator=ninja +openmp
+  # TODO: need to add cuda, effectively making a hops and amber config
+  # the environment only changes by the trilinosj spec adding the gpu stuff
+  # packages.yaml is where the machine specific config settings land
+  # need cuda defined correctly
+  #- trilinosj@develop generator=ninja +cuda cuda_arch=90
+
+  repos:
+    builtin:
+      destination: /tscratch/jjellio/eldorado/spack-dev/spack/repos
+
+  packages:
+    all:
+      permissions:
+        read: world
+        write: user
+      providers:
+        zlib-api: [zlib-ng]
+        blas: [openblas]
+        lapack: [openblas]
+
+    trilinosj:
+      require:
+      - '@=develop generator=ninja'
+    hdf5:
+      require:
+      - '@=1.10.7 build_system=cmake generator=ninja ~cxx~threadsafe~java~fortran+hl+mpi~szip~shared'
+  
+    zlib-ng:
+      require:
+      - ~shared
+  
+    netcdf-c:
+      require:
+      - build_system=cmake generator=ninja ~hdf4~jna~dap+mpi+parallel-netcdf~shared~nczarr_zip~szip~zstd~blosc~bz2  ^parallel-netcdf ^hdf5
+  
+    parallel-netcdf:
+      require:
+      - ~cxx~burstbuffer~fortran~shared
+  
+    parmetis:
+      require:
+      - '@=4.0.3~gdb~ipo~int64~shared'
+  
+    metis:
+      require:
+      - '@5:~gdb~int64~real64~shared'
+  
+    openblas:
+      require:
+      - +pic~shared~fortran threads=openmp
+  
+    cgns:
+      require:
+      - ~base_scope~int64~ipo~legacy~mem_debug~fortran+hdf5+mpi+scoping+static~shared

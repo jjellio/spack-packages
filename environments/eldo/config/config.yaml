@@ -1,0 +1,23 @@
+config:
+  install_tree:
+    root: $SPACK_INSTALL_DIR
+    projections:
+      all: "{architecture.platform}-{architecture.target}/{compiler.name}-{compiler.version}/{name}-{version}-{hash}"
+
+  build_stage:
+  - $SPACK_USER_CACHE_PATH/stage
+
+  source_cache: $SPACK_USER_CACHE_PATH/source_cache
+  misc_cache: $SPACK_USER_CACHE_PATH/misc_cache
+
+  shared_linking:
+  # This is the path to the root of the Spack install tree.
+  # You can use $spack here to refer to the root of the spack instance.
+    type: rpath
+    bind: false
+
+  # If this is false, tools like curl that use SSL will not verify
+  # certifiates. (e.g., curl will use use the -k option)
+  verify_ssl: false
+
+  build_jobs: 128

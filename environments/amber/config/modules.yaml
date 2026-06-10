@@ -1,0 +1,73 @@
+modules:
+  default:
+    roots:
+      tcl: $SPACK_MODULE_DIR
+    enable:
+    - tcl
+
+    tcl:
+      hash_length: 0
+      hide_implicits: true
+
+      all:
+        autoload: direct
+        filter:
+          exclude_env_vars:
+          - LD_LIBRARY_PATH
+        environment:
+          set:
+            ATDM_{name}_ROOT: "{prefix}"
+
+      exclude:
+      - berkeley-db
+      - bzip2
+      - ca-certificates-mozilla
+      - cray-pmi
+      - curl
+      - diffutils
+      - expat
+      - gdbm
+      - gettext
+      - glibc
+      - gmake
+      - hdf5+shared
+      - icu4c
+      - libbsd
+      - libffi
+      - libiconv
+      - libmd
+      - libsigsegv
+      - libxcrypt
+      - libxml2
+      - m4
+      - ncurses
+      - nghttp2
+      - openssl
+      - perl
+      - pigz
+      - pkgconf
+      - py-cython
+      - py-mpi4py
+      - py-numpy
+      - py-pip
+      - py-pkgconfig
+      - py-poetry-core
+      - py-setuptools
+      - py-wheel
+      - re2c
+      - readline
+      - sqlite
+      - tar
+      - texinfo
+      - util-linux-uuid
+      - xz
+      - zstd
+
+      projections:
+        all: "{compiler.name}-{compiler.version}/{name}/{version}"
+        metis~int64: "{compiler.name}-{compiler.version}/{name}-32bit/{version}"
+        parmetis~int64: "{compiler.name}-{compiler.version}/{name}-32bit/{version}"
+        hdf5+shared: "{compiler.name}-{compiler.version}/{name}-shared/{version}"
+
+
+
