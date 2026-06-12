@@ -119,6 +119,25 @@ class CrayMpich(MpichEnvironmentModifications, Package, CudaPackage, ROCmPackage
                 spec.mpifc = dependent_spec["fortran"].package.fortran
                 spec.mpif77 = dependent_spec["fortran"].package.fortran
 
+    def _external_link_dirs(self):
+        spec = self.spec
+    
+        fabric_prefix = spec["libfabric"].prefix
+        fabric_lib64 = fabric_prefix.lib64
+        fabric_lib = fabric_lib64 if os.path.isdir(fabric_lib64) else fabric_prefix.lib
+    
+        return [
+            spec["cray-pmi"].prefix.lib,
+            fabric_lib,
+        ]
+    
+    
+    def setup_dependent_build_environment(self, env, dependent_spec):
+        for libdir in self._external_link_dirs():
+            env.append_flags("LDFLAGS", "-L{0}".format(libdir))
+            env.append_flags("LDFLAGS", "-Wl,-rpath-link,{0}".format(libdir))
+            env.append_flags("LDFLAGS", "-Wl,-rpath,{0}".format(libdir))
+    
     @property
     def headers(self):
         hdrs = find_headers("mpi", self.prefix.include, recursive=True)
