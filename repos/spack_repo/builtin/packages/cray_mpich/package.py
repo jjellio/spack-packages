@@ -127,6 +127,7 @@ class CrayMpich(MpichEnvironmentModifications, Package, CudaPackage, ROCmPackage
         fabric_lib = fabric_lib64 if os.path.isdir(fabric_lib64) else fabric_prefix.lib
     
         return [
+            spec['cray-mpich'].prefix.lib,
             spec["cray-pmi"].prefix.lib,
             fabric_lib,
         ]
