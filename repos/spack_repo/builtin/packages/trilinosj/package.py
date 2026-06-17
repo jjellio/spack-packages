@@ -62,7 +62,7 @@ class Trilinosj(CMakePackage, CudaPackage, ROCmPackage):
     # ###################### Versions ##########################
 
     version("master", branch="master")
-    version("develop", branch="develop")
+    version("develop", commit="81ebb605123dd29057c4ece3ae226a1a50164231")
 
     # ###################### Variants ##########################
 
@@ -623,8 +623,8 @@ endif()
 
         options.extend(
             [
-                define("CMAKE_C_COMPILER", self.spec["mpi"].mpicc),
-                define("CMAKE_CXX_COMPILER", self.spec["mpi"].mpicxx),
+                define("CMAKE_C_COMPILER", spack_cc), #self.spec["mpi"].mpicc),
+                define("CMAKE_CXX_COMPILER", spack_cxx), #self.spec["mpi"].mpicxx),
                 self.define("CMAKE_SKIP_RPATH", True),
                 self.define("CMAKE_SKIP_BUILD_RPATH", True)
             ]
